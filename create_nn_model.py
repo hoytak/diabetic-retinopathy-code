@@ -31,39 +31,38 @@ kernel_size = 8
   stride = 4
   num_channels = 64
   random_type = xavier
-layer[1->2] = max_pooling
+layer[1->2] = relu
+layer[2->3] = max_pooling
   kernel_size = 3
   stride = 2
-layer[2->3] = conv
+layer[3->4] = conv
   kernel_size = 3
   padding = 1
   stride = 2
-  num_channels = 64
+  num_channels = 32
   random_type = xavier
-layer[3->4] = max_pooling
+layer[4->5] = relu
+layer[5->6] = max_pooling
   kernel_size = 3
   stride = 2
-layer[4->5] = dropout
+layer[6->7] = dropout
   threshold = 0.5
-layer[5->6] = flatten
-layer[6->7] = fullc
-num_hidden_units = 128
+layer[7->8] = flatten
+layer[8->9] = fullc
+num_hidden_units = 64
   init_sigma = 0.01
-layer[7->8] = dropout
+layer[9->10] = dropout
   threshold = 0.5
-layer[8->9] = sigmoid
-layer[9->10] = fullc
-  num_hidden_units = 128
-  init_sigma = 0.01
-layer[10->11] = fullc
+layer[10->11] = sigmoid
+layer[11->12] = fullc
   num_hidden_units = %d
   init_sigma = 0.01
-layer[11->12] = softmax
+layer[12->13] = softmax
 netconfig=end
 
 # input shape not including batch
 input_shape = 3,256,256
-batch_size = 100
+batch_size = 64
 
 ## global parameters
 init_random = gaussian
@@ -71,12 +70,14 @@ init_random = gaussian
 ## learning parameters
 learning_rate = 0.025
 momentum = 0.9
-l2_regularization = 0.0
+l2_regularization = 0.0001
 divideby = 255
 # end of config
 ''' % (5 if which_model == 0 else 2)
 
 network = gl.deeplearning.NeuralNet(conf_str=network_str)
+
+model_filename = model_path + "gpu_model_%d-%s" % (which_model, model_name)
 
 if os.path.exists("image-sframes/mean_image"):
     mean_image_sf = gl.SFrame("image-sframes/mean_image")
@@ -92,7 +93,9 @@ if which_model == 0:
         X_train, features = ["image"], target = "level",
         network = network, mean_image = mean_image,
         device = "gpu", random_mirror=True, max_iterations = 25,
-        validation_set=X_valid)
+        validation_set=X_valid,
+        model_checkpoint_interval = 1,
+        model_checkpoint_path = model_filename + "-checkpoint")
 
 else:
     assert which_model in [1,2,3,4]
@@ -108,6 +111,8 @@ else:
         X_train,
         features = ["image"], target = "class",
         network = network, mean_image = mean_image,
+        model_checkpoint_path = model_filename + "-checkpoint",
+        model_checkpoint_interval = 1,
         device = "gpu", random_mirror=True, max_iterations = 25, validation_set=X_valid)
     
 m.save(model_path + "gpu_model_%d-%s" % (which_model, model_name))
@@ -125,18 +130,28 @@ X_test["features"] = m.extract_features(X_test[["image"]])
 
 def flatten_dict(d):
     out_d = {}
+
     def _add_to_dict(base, out_d, d):
-        for k, v in d.iteritems():
-            new_key = k if base is None else (base + '.' + str(k))
-            if type(v) is dict:
+
+        if type(d) in [array.array, list]:
+            for j, v in enumerate(d):
+                new_key = str(j) if base is None else (base + ".%d" % j)
                 _add_to_dict(new_key, out_d, v)
-            elif type(v) is array.array:
-                for j, x in enumerate(v):
-                    if x != 0:
-                        out_d[new_key + ".%d" % j] = x
-            else:
-                out_d[new_key] = v
+
+        elif type(d) is dict:
+            for k, v in d.iteritems():
+                new_key = k if base is None else (base + '.' + str(k))
+                if type(v) in [dict, array.array, list]:
+                    _add_to_dict(new_key, out_d, v)
+                else:
+                    out_d[new_key] = v
+        else:
+            out_d[base] = d
+
+
+                    
     _add_to_dict(None, out_d, d)
+    
     return out_d
 
 score_column = "scores_%d" % which_model
