@@ -8,8 +8,8 @@ import array
 
 import sys
 
-model_name = "full-inet-small"
-which_model = 4
+model_name = "full-inet-small-large-kernel"
+which_model = 0
 
 print "Running model %d, %s" % (which_model, model_name)
 
@@ -17,67 +17,70 @@ alt_path = os.path.expanduser("~/data/tmp/")
 if os.path.exists(alt_path):
     gl.set_runtime_config("GRAPHLAB_CACHE_FILE_LOCATIONS", alt_path)
 
-model_path = "nn_256x256/models/"
+model_path = "nn_256x256/models/model-%d-%s/" % (which_model, model_name)
+model_filename = model_path + "nn_model" 
 
 X_train = gl.SFrame("image-sframes/train-%d/" % which_model)
 X_valid = gl.SFrame("image-sframes/validation-%d/" % which_model)
 X_test = gl.SFrame("image-sframes/test/")
 
-network_str = '''
-netconfig=start
-layer[0->1] = conv
-kernel_size = 8
-  padding = 1
-  stride = 4
-  num_channels = 64
-  random_type = xavier
-layer[1->2] = relu
-layer[2->3] = max_pooling
-  kernel_size = 3
-  stride = 2
-layer[3->4] = conv
-  kernel_size = 3
-  padding = 1
-  stride = 2
-  num_channels = 32
-  random_type = xavier
-layer[4->5] = relu
-layer[5->6] = max_pooling
-  kernel_size = 3
-  stride = 2
-layer[6->7] = dropout
-  threshold = 0.5
-layer[7->8] = flatten
-layer[8->9] = fullc
-num_hidden_units = 64
-  init_sigma = 0.01
-layer[9->10] = dropout
-  threshold = 0.5
-layer[10->11] = sigmoid
-layer[11->12] = fullc
-  num_hidden_units = %d
-  init_sigma = 0.01
-layer[12->13] = softmax
-netconfig=end
+################################################################################
 
-# input shape not including batch
-input_shape = 3,256,256
-batch_size = 64
+# init_random vs random_type in ConvolutionLayer. 
 
-## global parameters
-init_random = gaussian
+dll = graphlab.deeplearning.layers
 
-## learning parameters
-learning_rate = 0.025
-momentum = 0.9
-l2_regularization = 0.0001
-divideby = 255
-# end of config
-''' % (5 if which_model == 0 else 2)
+nn = graphlab.deeplearning.NeuralNet()
 
-network = gl.deeplearning.NeuralNet(conf_str=network_str)
+nn.layers.append(dll.ConvolutionLayer(
+    kernel_size = 8,
+    stride=4,
+    num_channels=256,
+    init_random="xavier",
+    num_groups=16))
 
-model_filename = model_path + "gpu_model_%d-%s" % (which_model, model_name)
+nn.layers.append(dll.MaxPoolingLayer(
+    kernel_size = 4,
+    stride=1))
+
+nn.layers.append(dll.SigmoidLayer())
+
+nn.layers.append(dll.ConvolutionLayer(
+    kernel_size = 3,
+    stride=1,
+    num_channels=128,
+    init_random="xavier",
+    num_groups=16))
+
+nn.layers.append(dll.SigmoidLayer())
+
+nn.layers.append(dll.AveragePoolingLayer(
+    kernel_size = 4,
+    stride=1))
+
+nn.layers.append(dll.RectifiedLinearLayer())
+
+nn.layers.append(dll.ConvolutionLayer(
+    kernel_size = 8,
+    stride=1,
+    num_channels=64,
+    init_random="xavier"))
+
+nn.layers.append(dll.SigmoidLayer())
+
+nn.layers.append(dll.FlattenLayer())
+
+nn.layers.append(dll.FullConnectionLayer(
+    num_hidden_units = 256,
+    init_sigma = 0.005,
+    init_random = "gaussian"))
+
+nn.layers.append(dll.FullConnectionLayer(
+    num_hidden_units = 5 if which_model == 0 else 2,
+    init_sigma = 0.005,
+    init_random = "gaussian"))
+
+################################################################################
 
 if os.path.exists("image-sframes/mean_image"):
     mean_image_sf = gl.SFrame("image-sframes/mean_image")
@@ -92,11 +95,11 @@ if which_model == 0:
     m = gl.classifier.neuralnet_classifier.create(
         X_train, features = ["image"], target = "level",
         network = network, mean_image = mean_image,
-        device = "gpu", random_mirror=True, max_iterations = 25,
+        device = "gpu", random_mirror=True, max_iterations = 10,
         validation_set=X_valid,
         model_checkpoint_interval = 1,
         model_checkpoint_path = model_filename + "-checkpoint")
-
+    
 else:
     assert which_model in [1,2,3,4]
 
@@ -113,9 +116,9 @@ else:
         network = network, mean_image = mean_image,
         model_checkpoint_path = model_filename + "-checkpoint",
         model_checkpoint_interval = 1,
-        device = "gpu", random_mirror=True, max_iterations = 25, validation_set=X_valid)
+        device = "gpu", random_mirror=True, max_iterations = 10, validation_set=X_valid)
     
-m.save(model_path + "gpu_model_%d-%s" % (which_model, model_name))
+m.save(model_filename)
 
 X_train["class_scores"] = \
   (m.predict_topk(X_train[["image"]], k= (5 if which_model == 0 else 2))\
@@ -141,14 +144,10 @@ def flatten_dict(d):
         elif type(d) is dict:
             for k, v in d.iteritems():
                 new_key = k if base is None else (base + '.' + str(k))
-                if type(v) in [dict, array.array, list]:
-                    _add_to_dict(new_key, out_d, v)
-                else:
-                    out_d[new_key] = v
+                _add_to_dict(new_key, out_d, v)
         else:
-            out_d[base] = d
-
-
+            if d != 0:
+                out_d[base] = d
                     
     _add_to_dict(None, out_d, d)
     
@@ -166,7 +165,7 @@ Xty2[features_column] = Xty2["ft"].apply(flatten_dict)
 
 Xty = Xty.join(Xty2[["name", features_column]], on = "name")
 
-Xty[["name", score_column, "level", features_column]].save(model_path + "/scores_train_%d" % which_model)
+Xty[["name", score_column, "level", features_column]].save(model_path + "scores_train")
 
 Xtst = X_test[["name", "source", "class_scores", "features"]]
 Xtsty = Xtst.groupby("name", {"cs" : agg.CONCAT("source", "class_scores")})
@@ -177,7 +176,7 @@ Xtsty2[features_column] = Xtsty2["ft"].apply(flatten_dict)
 
 Xtsty = Xtsty.join(Xtsty2[["name", features_column]], on = "name")
 
-Xtsty[["name", score_column, features_column]].save(model_path + "/scores_test_%d" % which_model)
+Xtsty[["name", score_column, features_column]].save(model_path + "scores_test")
 
 
 
