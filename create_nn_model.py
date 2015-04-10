@@ -8,7 +8,7 @@ import array
 
 import sys
 
-model_name = "full-inet-small-large-kernel"
+model_name = "pooling-2"
 which_model = 0
 
 print "Running model %d, %s" % (which_model, model_name)
@@ -28,57 +28,82 @@ X_test = gl.SFrame("image-sframes/test/")
 
 # init_random vs random_type in ConvolutionLayer. 
 
-dll = graphlab.deeplearning.layers
+dll = gl.deeplearning.layers
 
-nn = graphlab.deeplearning.NeuralNet()
-
-nn.layers.append(dll.ConvolutionLayer(
-    kernel_size = 8,
-    stride=4,
-    num_channels=256,
-    init_random="xavier",
-    num_groups=16))
-
-nn.layers.append(dll.MaxPoolingLayer(
-    kernel_size = 4,
-    stride=1))
-
-nn.layers.append(dll.SigmoidLayer())
+nn = gl.deeplearning.NeuralNet()
 
 nn.layers.append(dll.ConvolutionLayer(
-    kernel_size = 3,
-    stride=1,
-    num_channels=128,
-    init_random="xavier",
-    num_groups=16))
-
-nn.layers.append(dll.SigmoidLayer())
-
-nn.layers.append(dll.AveragePoolingLayer(
-    kernel_size = 4,
-    stride=1))
-
-nn.layers.append(dll.RectifiedLinearLayer())
-
-nn.layers.append(dll.ConvolutionLayer(
-    kernel_size = 8,
-    stride=1,
-    num_channels=64,
+    kernel_size = 5,
+    stride=2,
+    num_channels=96,
     init_random="xavier"))
 
+nn.layers.append(dll.MaxPoolingLayer(
+    kernel_size = 3,
+    stride=2))
+
 nn.layers.append(dll.SigmoidLayer())
+
+for i in xrange(5):
+
+    nn.layers.append(dll.ConvolutionLayer(
+        kernel_size = 3,
+        padding = 1,
+        stride=1,
+        num_channels=64 - 8 * i,
+        init_random="xavier"))
+    
+    nn.layers.append(dll.SumPoolingLayer(
+        kernel_size = 3,
+        padding = 1,
+        stride=2))
+
+    nn.layers.append(dll.RectifiedLinearLayer())
+    
+# nn.layers.append(dll.ConvolutionLayer(
+#     kernel_size = 8,
+#     stride=4,
+#     num_channels=32,
+#     init_random="gaussian"))
+
+# nn.layers.append(dll.RectifiedLinearLayer())
+
+# nn.layers.append(dll.SigmoidLayer())
 
 nn.layers.append(dll.FlattenLayer())
 
 nn.layers.append(dll.FullConnectionLayer(
-    num_hidden_units = 256,
+    num_hidden_units = 64,
     init_sigma = 0.005,
+    init_bias = 1,
     init_random = "gaussian"))
+
+nn.layers.append(dll.RectifiedLinearLayer())
+
+nn.layers.append(dll.FullConnectionLayer(
+    num_hidden_units = 32,
+    init_sigma = 0.005,
+    init_bias = 1,
+    init_random = "gaussian"))
+
+nn.layers.append(dll.RectifiedLinearLayer())
 
 nn.layers.append(dll.FullConnectionLayer(
     num_hidden_units = 5 if which_model == 0 else 2,
     init_sigma = 0.005,
     init_random = "gaussian"))
+
+nn.layers.append(dll.SoftmaxLayer())
+
+nn.params["batch_size"] = 32
+nn.params["momentum"] = 0.9
+# nn.params["learning_rate"] = 0.01
+# nn.params["l2_regularization"] = 0.0005
+# nn.params["bias_learning_rate"] = 0.02
+# nn.params["learning_rate_schedule"] = "exponential_decay"
+# nn.params["learning_rate_gamma"] = 0.1
+# nn.params["init_random"] = "gaussian"
+# nn.params["init_sigma"] = 0.01
 
 ################################################################################
 
@@ -94,7 +119,7 @@ if which_model == 0:
 
     m = gl.classifier.neuralnet_classifier.create(
         X_train, features = ["image"], target = "level",
-        network = network, mean_image = mean_image,
+        network = nn, mean_image = mean_image,
         device = "gpu", random_mirror=True, max_iterations = 10,
         validation_set=X_valid,
         model_checkpoint_interval = 1,
@@ -113,7 +138,8 @@ else:
     m = gl.classifier.neuralnet_classifier.create(
         X_train,
         features = ["image"], target = "class",
-        network = network, mean_image = mean_image,
+                                                  # network = nn,
+        mean_image = mean_image,
         model_checkpoint_path = model_filename + "-checkpoint",
         model_checkpoint_interval = 1,
         device = "gpu", random_mirror=True, max_iterations = 10, validation_set=X_valid)
