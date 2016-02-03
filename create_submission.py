@@ -10,7 +10,7 @@ import sys
 
 # gl.set_runtime_config("GRAPHLAB_CACHE_FILE_LOCATIONS", os.path.expanduser("~/data/tmp/"))
 
-model_path = "/data/hoytak/diabetic/models/models"
+model_path = "/data/hoytak/diabetic/models/models/model-0-pooling-3"
 
 train_sf = []
 test_sf = []
@@ -18,11 +18,11 @@ feature_names = []
 each_sf_feature_names = []
 
 # for n in [0, "1b", '2b', 4]:
-for n in [0, 1, "1b", 2, '2b', 3, 4]:    
+for n in [0]: #, 1, "1b", 2, '2b', 3, 4]:
     try: 
         print "Loading %s" % str(n)
-        Xf_train = gl.SFrame(model_path + "/scores_train_%s" % str(n))
-        Xf_test = gl.SFrame(model_path + "/scores_test_%s" % str(n))
+        Xf_train = gl.SFrame(model_path + "/scores_train_raw")
+        Xf_test = gl.SFrame(model_path + "/scores_test")
 
         sf_feature_names = []
         

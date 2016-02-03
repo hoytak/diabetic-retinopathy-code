@@ -8,7 +8,7 @@ import array
 
 import sys
 
-model_name = "pooling-2"
+model_name = "pooling-3"
 which_model = 0
 
 print "Running model %d, %s" % (which_model, model_name)
@@ -17,11 +17,12 @@ alt_path = os.path.expanduser("~/data/tmp/")
 if os.path.exists(alt_path):
     gl.set_runtime_config("GRAPHLAB_CACHE_FILE_LOCATIONS", alt_path)
 
-model_path = "nn_256x256/models/model-%d-%s/" % (which_model, model_name)
+model_path = "nn_360x360/models/model-%d-%s/" % (which_model, model_name)
 model_filename = model_path + "nn_model" 
 
-X_train = gl.SFrame("image-sframes/train-%d/" % which_model)
-X_valid = gl.SFrame("image-sframes/validation-%d/" % which_model)
+X_train = gl.SFrame("image-sframes/train-%d-0/" % which_model)
+X_valid = gl.SFrame("image-sframes/valid-%d-0/" % which_model)
+X_train_raw = gl.SFrame("image-sframes/train-raw/")
 X_test = gl.SFrame("image-sframes/test/")
 
 ################################################################################
@@ -33,33 +34,33 @@ dll = gl.deeplearning.layers
 nn = gl.deeplearning.NeuralNet()
 
 nn.layers.append(dll.ConvolutionLayer(
-    kernel_size = 5,
-    stride=2,
+    kernel_size = 12,
+    stride=3,
     num_channels=96,
     init_random="xavier"))
 
-nn.layers.append(dll.MaxPoolingLayer(
-    kernel_size = 3,
-    stride=2))
+# nn.layers.append(dll.MaxPoolingLayer(
+#     kernel_size = 5,
+#     stride=1))
 
-nn.layers.append(dll.SigmoidLayer())
+# nn.layers.append(dll.SigmoidLayer())
 
-for i in xrange(5):
+# for i in xrange(3):
 
-    nn.layers.append(dll.ConvolutionLayer(
-        kernel_size = 3,
-        padding = 1,
-        stride=1,
-        num_channels=64 - 8 * i,
-        init_random="xavier"))
+#     nn.layers.append(dll.ConvolutionLayer(
+#         kernel_size = 3,
+#         padding = 1,
+#         stride=1,
+#         num_channels=64 - 8 * i,
+#         init_random="xavier"))
     
-    nn.layers.append(dll.SumPoolingLayer(
-        kernel_size = 3,
-        padding = 1,
-        stride=2))
+#     nn.layers.append(dll.MaxPoolingLayer(
+#         kernel_size = 3,
+#         padding = 1,
+#         stride=2))
 
-    nn.layers.append(dll.RectifiedLinearLayer())
-    
+#     nn.layers.append(dll.RectifiedLinearLayer())
+
 # nn.layers.append(dll.ConvolutionLayer(
 #     kernel_size = 8,
 #     stride=4,
@@ -70,12 +71,23 @@ for i in xrange(5):
 
 # nn.layers.append(dll.SigmoidLayer())
 
+nn.layers.append(dll.SigmoidLayer())
+
 nn.layers.append(dll.FlattenLayer())
+
+
+nn.layers.append(dll.FullConnectionLayer(
+    num_hidden_units = 128,
+    init_sigma = 0.001,
+    init_bias = 0,
+    init_random = "gaussian"))
+
+nn.layers.append(dll.RectifiedLinearLayer())
 
 nn.layers.append(dll.FullConnectionLayer(
     num_hidden_units = 64,
     init_sigma = 0.005,
-    init_bias = 1,
+    init_bias = 0,
     init_random = "gaussian"))
 
 nn.layers.append(dll.RectifiedLinearLayer())
@@ -95,15 +107,16 @@ nn.layers.append(dll.FullConnectionLayer(
 
 nn.layers.append(dll.SoftmaxLayer())
 
-nn.params["batch_size"] = 32
-nn.params["momentum"] = 0.9
+nn.params["batch_size"] = 64
+# nn.params["momentum"] = 0.9
+nn.params["init_random"] = "gaussian"
+nn.params["init_sigma"] = 0.001
+
 # nn.params["learning_rate"] = 0.01
 # nn.params["l2_regularization"] = 0.0005
 # nn.params["bias_learning_rate"] = 0.02
 # nn.params["learning_rate_schedule"] = "exponential_decay"
 # nn.params["learning_rate_gamma"] = 0.1
-# nn.params["init_random"] = "gaussian"
-# nn.params["init_sigma"] = 0.01
 
 ################################################################################
 
@@ -120,7 +133,7 @@ if which_model == 0:
     m = gl.classifier.neuralnet_classifier.create(
         X_train, features = ["image"], target = "level",
         network = nn, mean_image = mean_image,
-        device = "gpu", random_mirror=True, max_iterations = 10,
+        device = "gpu", random_mirror=True, max_iterations = 100,
         validation_set=X_valid,
         model_checkpoint_interval = 1,
         model_checkpoint_path = model_filename + "-checkpoint")
@@ -149,12 +162,17 @@ m.save(model_filename)
 X_train["class_scores"] = \
   (m.predict_topk(X_train[["image"]], k= (5 if which_model == 0 else 2))\
    .unstack(["class", "score"], "scores").sort("row_id")["scores"])
+   
+X_train_raw["class_scores"] = \
+  (m.predict_topk(X_train_raw[["image"]], k= (5 if which_model == 0 else 2))\
+   .unstack(["class", "score"], "scores").sort("row_id")["scores"])
 
 X_test["class_scores"] = \
     (m.predict_topk(X_test[["image"]], k=(5 if which_model == 0 else 2))
      .unstack(["class", "score"], "scores").sort("row_id")["scores"])
     
 X_train["features"] = m.extract_features(X_train[["image"]])
+X_train_raw["features"] = m.extract_features(X_train_raw[["image"]])
 X_test["features"] = m.extract_features(X_test[["image"]])
 
 def flatten_dict(d):
@@ -182,27 +200,35 @@ def flatten_dict(d):
 score_column = "scores_%d" % which_model
 features_column = "features_%d" % which_model
     
-Xt = X_train[["name", "source", "class_scores", "level", "features"]]
-Xty = Xt.groupby(["name", "level"], {"cs" : agg.CONCAT("source", "class_scores")})
+Xt = X_train[["name", "class_scores", "level", "features"]]
+Xty = Xt.groupby(["name", "level"], {"cs" : agg.CONCAT("class_scores")})
 Xty[score_column] = Xty["cs"].apply(flatten_dict)
 
-Xty2 = Xt.groupby("name", {"ft" : agg.CONCAT("source", "features")})
+Xty2 = Xt.groupby("name", {"ft" : agg.CONCAT("features")})
 Xty2[features_column] = Xty2["ft"].apply(flatten_dict)
 
 Xty = Xty.join(Xty2[["name", features_column]], on = "name")
 
 Xty[["name", score_column, "level", features_column]].save(model_path + "scores_train")
 
-Xtst = X_test[["name", "source", "class_scores", "features"]]
-Xtsty = Xtst.groupby("name", {"cs" : agg.CONCAT("source", "class_scores")})
+Xtst = X_test[["name", "class_scores", "features"]]
+Xtsty = Xtst.groupby("name", {"cs" : agg.CONCAT("class_scores")})
 Xtsty[score_column] = Xtsty["cs"].apply(flatten_dict)
 
-Xtsty2 = Xtst.groupby("name", {"ft" : agg.CONCAT("source", "features")})
+Xtsty2 = Xtst.groupby("name", {"ft" : agg.CONCAT("features")})
 Xtsty2[features_column] = Xtsty2["ft"].apply(flatten_dict)
 
 Xtsty = Xtsty.join(Xtsty2[["name", features_column]], on = "name")
 
 Xtsty[["name", score_column, features_column]].save(model_path + "scores_test")
 
+Xtraw = X_train_raw[["name", "class_scores", "features"]]
+Xtrawy = Xtraw.groupby("name", {"cs" : agg.CONCAT("class_scores")})
+Xtrawy[score_column] = Xtrawy["cs"].apply(flatten_dict)
 
+Xtrawy2 = Xtraw.groupby("name", {"ft" : agg.CONCAT("features")})
+Xtrawy2[features_column] = Xtrawy2["ft"].apply(flatten_dict)
 
+Xtrawy = Xtrawy.join(Xtrawy2[["name", features_column]], on = "name")
+
+Xtrawy[["name", score_column, features_column]].save(model_path + "scores_train_raw")
